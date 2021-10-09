@@ -26,6 +26,7 @@ func (g *GobCodec) ReadHeader(header *Header) error {
 }
 
 func (g *GobCodec) ReadBody(body interface{}) error {
+	//gob.
 	return g.dec.Decode(body)
 }
 
