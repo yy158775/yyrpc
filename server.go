@@ -49,7 +49,8 @@ func (s *Server) Accept(lis net.Listener) {
 			log.Println("rpc server: accept error:",err) //log.Fatal
 			return //直接返回 不是continue
 		}
-		s.ServeConn(conn)
+		go s.ServeConn(conn) //这里会不会出现问题 server终止了，那么怎么办  其他链接也出错了 这怎么办？
+		//思考一下这个问题吧
 	}
 }
 
@@ -76,7 +77,7 @@ func (s *Server) ServeConn(conn io.ReadWriteCloser) {
 		log.Println("rpc server: invalid CodecType")
 		return
 	}
-	s.ServeCodec(f(conn))
+	s.ServeCodec(f(conn)) //并行了
 }
 
 
@@ -90,10 +91,8 @@ func (s *Server) ServeCodec(cod codec.Codec) {
 		req,err := s.readRequest(cod)
 		if err != nil {
 			if req == nil {
-				fmt.Println("break")
 				break //不可能恢复了 连头都没有读出来 结束这个链接  仔细分析一下错误的类型，计网各种错误的严重程度
 			}
-				fmt.Println("after break")
 				req.h.Error = err.Error()
 				s.sendResponse(sending, req.h, invalidRequest, cod) //至少发回一个头部，可以保存错误信息
 				continue
@@ -113,7 +112,8 @@ type request struct {
 func (s *Server) sendResponse(sending *sync.Mutex,h *codec.Header,body interface{},cod codec.Codec) {
 	sending.Lock()
 	defer sending.Unlock()
-	if err := cod.Write(h,body);err != nil {  //程序通过defer操作已经将这个接口关闭了
+	if err := cod.Write(h,body);err != nil {  //程序通过defer操作已经将这个接口关闭了 在这关闭也可以
+		//但是有设计到代码重用的方式
 		log.Println("rpc server: write response err:",err)
 	}
 }
@@ -121,10 +121,11 @@ func (s *Server) sendResponse(sending *sync.Mutex,h *codec.Header,body interface
 func (s *Server) handleRequest(req *request,cod codec.Codec,wg *sync.WaitGroup,sending *sync.Mutex) {
 	defer wg.Done()
 	//req.argv
-	log.Println(req.h,req.argv.Elem())  //elem指针  这个value必须是指针
+	log.Println("header:",req.h," body:",req.argv.Elem())  //elem指针  这个value必须是指针
 	//Kind is not Interface or Ptr 类型是接口
 	//打印全部内容
 	req.replyv = reflect.ValueOf(fmt.Sprintf("geerpc resp %d",req.h.Seq))
+
 	s.sendResponse(sending,req.h,req.replyv.Interface(),cod) //错误已经在这里处理过了
 	//还是用的不熟练啊，这里不理解你后面的reflect.value 怎么可能理解
 }
@@ -141,17 +142,19 @@ func (s *Server) readRequest(cod codec.Codec) (req *request,err error) {
 	req.argv = reflect.New(reflect.TypeOf(""))  //reflect.Value 类型和值 现申请了一个Value然后传入禁区
 	//argv是指针类型没问题
 	//reflect.ValueOf() 到底value里面是指针还是其他的值，不一定 看inerface吧
+
 	if err = cod.ReadBody(req.argv.Interface());err != nil {
 		log.Println("rpc server:read body error:",err) //这里不直接返回，那怎么办，错误信息没有了吗
 	}
-	log.Println("Body:",req.argv.Elem())
 	return req,err
 }
 
 //为什么要单独包装
+//error : 返回错误类型
+//反正到外面都要关闭
 func (s *Server) readRequestHeader(cod codec.Codec) (*codec.Header,error){
 	h := &codec.Header{}
-	if err := cod.ReadHeader(h);err != nil {
+	if err := cod.ReadHeader(h);err != nil {  //在这里处理一下错误，然后将错误向上传递
 		if err != io.EOF && err != io.ErrUnexpectedEOF {  //io错误的分类可以总结一下
 			log.Println("rpc server:read header error:",err)
 		}

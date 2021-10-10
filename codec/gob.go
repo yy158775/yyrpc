@@ -9,7 +9,7 @@ import (
 type GobCodec struct {
 	conn io.ReadWriteCloser //读写
 	writer *bufio.Writer
-	dec *gob.Decoder
+	dec *gob.Decoder //只是个结构体，conn的关闭不是依靠他
 	enc *gob.Encoder
 }
 
@@ -59,3 +59,5 @@ func NewGobCodec (conn io.ReadWriteCloser) Codec {  //接口从来没有指针�
 	}
 }
 
+//这里面直接读写，错误都不在这里面处理，直接返回上层
+//什么时候错误不返回上层，上层对这个错误不怎么需要的情况下吧
