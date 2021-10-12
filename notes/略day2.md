@@ -307,5 +307,17 @@ Go(serviceMethod string, args, reply interface{}, done chan *Call) *Call
 Call(serviceMethod string, args, reply interface{}) error
 
 func (client *Client) send(call *Call)
+
+func Dial(network, address string, opts ...*Option) (client *Client, err error) 
+
+func parseOptions(opts ...*Option) (*Option, error) 
+func (client *Client) receive() 
+func NewClient(conn net.Conn, opt *Option) (*Client, error) 
+
+
+func (client *Client) registerCall(call *Call) (uint64, error) 
+func (client *Client) removeCall(seq uint64) *Call
+func (client *Client) terminateCalls(err error)
 ```
 
+![image-20211010201834950](/home/yy/.config/Typora/typora-user-images/image-20211010201834950.png)

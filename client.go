@@ -1,19 +1,24 @@
-package client
+package yyrpc
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"sync"
-	server "yyrpc"
+	"time"
 	"yyrpc/codec"
 )
 
 type Client struct {
 	seq uint64
 	cc codec.Codec
-	opt *server.Option
+	opt *Option
 	header codec.Header
 	mu sync.RWMutex
 	sending sync.Mutex
@@ -44,10 +49,7 @@ func (c *Client) Close() error {
 		log.Println("rpc client:has already closed")
 		return ErrShutDown
 	}
-	//if err := c.cc.Close();err != nil {
-	//	log.Println("rpc client:close error:",err)
-	//	return err
-	//} 不用处理错误就是这么简单
+
 	c.closing = true
 	return c.cc.Close()
 	//里面没有conn这个结构体
@@ -61,7 +63,7 @@ func (c *Client) registerCall(call *Call) (uint64,error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.IsAvailable() {
-		return 0,ErrShutDown
+		return 0, ErrShutDown
 	}
 	call.Seq = c.seq
 	c.seq++
@@ -118,48 +120,34 @@ func (c *Client) receive() {
 	//这个一般是服务端出错了，就是读取失败了，返回错误了shutdown
 }
 
-func Dial (network,address string,opts ...*server.Option) (*Client,error) {
-	opt,err := parseOption(opts...)
-	if err != nil {
-		return nil,err
-	}
-	conn,err := net.Dial(network,address)
-	if err != nil {
-		return nil,err
-	}
-	defer func(){
-		if err != nil {
-			conn.Close()
-		}
-	}()
-
+func Dial (network,address string,opts ...*Option) (*Client,error) {
+	return dialTimeout(NewClient,network,address,opts...)
 	//client,err := NewClient(conn,opt)
 	//if err != nil {
 	//	return nil,err
 	//}
 	//return client,nil 到最后可以优化吗
-	return NewClient(conn,opt)
 }
 
 //这里也要想一想怎么回事吧
-func parseOption(opts ...*server.Option)(*server.Option,error) {
-	var opt *server.Option
+func parseOption(opts ...*Option)(*Option,error) {
+	var opt *Option
 	if len(opts) == 0 || opts[0] == nil {  //自己验证一下这里的语法结构啊
-		opt = &server.DefaultOption
+		opt = &DefaultOption
 		return opt,nil
 	}
 	if len(opts) > 1 {
 		return nil,errors.New("The number of option is more than 1")
 	}
 	opt = opts[0]
-	opt.MagicNumber = server.DefaultOption.MagicNumber
+	opt.MagicNumber = DefaultOption.MagicNumber
 	if opt.CodecType == "" {
-		opt.CodecType = server.DefaultOption.CodecType
+		opt.CodecType = DefaultOption.CodecType
 	}
 	return opt,nil
 }
 
-func NewClient(conn net.Conn,opt *server.Option) (*Client,error) {
+func NewClient(conn net.Conn,opt *Option) (*Client,error) {
 	f := codec.NewCodecFuncMap[opt.CodecType]
 	if f == nil {
 		return nil,errors.New("Invalid CodecType")
@@ -172,7 +160,7 @@ func NewClient(conn net.Conn,opt *server.Option) (*Client,error) {
 	return NewClientCodec(f(conn),opt),nil
 }
 
-func NewClientCodec(cod codec.Codec,opt *server.Option) (*Client) {
+func NewClientCodec(cod codec.Codec,opt *Option) (*Client) {
 	client := &Client{
 		seq:	  1,
 		cc:       cod,
@@ -186,7 +174,7 @@ func NewClientCodec(cod codec.Codec,opt *server.Option) (*Client) {
 }
 
 //replys 必须是指针类型
-func (c *Client) Go(servciemethod string,args,replys interface{},done chan *Call) *Call{
+func (c *Client) Go(servciemethod string,args,replys interface{},done chan *Call) *Call {
 	//排除异常情况啊哥哥
 	if done == nil {  //len(done) 里面如果是空的怎么办
 		done = make(chan *Call,10) //默认使用什么吧
@@ -203,11 +191,17 @@ func (c *Client) Go(servciemethod string,args,replys interface{},done chan *Call
 	return call
 }
 
-func (c *Client) Call(servicemethod string,args,replys interface{}) error {
+func (c *Client) Call(ctx context.Context,servicemethod string,args,replys interface{}) error {
 	done := make(chan *Call,1)
 	call := c.Go(servicemethod,args,replys,done)
-	<-call.Done
-	return call.Error
+	//好像是这样有另外一个协程在既是吗？？
+	select {
+	case <-ctx.Done():
+		c.removeCall(call.Seq)
+		return fmt.Errorf("rpc client:Call failed : %s",ctx.Err().Error())
+	case call := <-call.Done:
+		return call.Error
+	}
 }
 
 func (c *Client) send(call *Call) {
@@ -236,3 +230,62 @@ func (c *Client) send(call *Call) {
 	}
 }
 
+type newClientFunc func(conn net.Conn,opt *Option) (*Client,error)
+
+func dialTimeout(f newClientFunc,network,address string,opts ...*Option) (client *Client,err error) {
+	opt,err := parseOption(opts...)
+	if err != nil {
+		return nil,err
+	}
+
+	conn,err := net.DialTimeout(network,address,opt.ConnectTimeout) //我怎么感觉等了双份时间
+	if err != nil {
+		return nil,err
+	}
+	defer func(){
+		if err != nil {
+			conn.Close()
+		}
+	}()
+
+	type clientResult struct {
+		client *Client
+		err error
+	}
+
+	ch := make(chan *clientResult)
+
+	go func() {
+		c,err := f(conn,opt)
+
+		//这种情况就是不会堵塞
+		select {
+		case ch <- &clientResult{ client: c, err:err }:
+		default:
+			return
+		}
+	}()
+	//不知道为啥单列处理 ???? 等于0表示一直等待应该是
+	if opt.ConnectTimeout == 0 {
+		result := <-ch
+		return result.client,result.err
+	}
+
+	select {
+	case <-time.After(opt.ConnectTimeout):
+		return nil,fmt.Errorf("rpc dial:connect timeout:%s",opt.ConnectTimeout)
+	case result := <-ch :  //这里为零
+		return result.client,result.err
+	}
+}
+
+
+func NewHTTPClient(conn net.Conn,opt *Option) {
+	_,_ = io.WriteString(conn,fmt.Sprintf("CONNECT %s HTTP/1.1\n\n",defaultRPCPath))
+	//为什么要输入两个/n/n
+	resp,err := http.ReadResponse(bufio.NewReader(conn),&http.Request{Method: "CONNECT"})
+	if err != nil || resp.Status != connected {
+
+	}
+
+}

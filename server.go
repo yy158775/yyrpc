@@ -1,13 +1,17 @@
-package server
+package yyrpc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"reflect"
+	"strings"
 	"sync"
+	"time"
 	"yyrpc/codec"
 )
 
@@ -23,10 +27,12 @@ var invalidRequest = struct{}{}
 type Option struct {
 	MagicNumber int
 	CodecType string
+	ConnectTimeout time.Duration
+	HandleTimeout time.Duration
 }
 
 type Server struct {
-
+	serviceMap sync.Map //这里用这个数据结构的目的是什么
 }
 
 func NewServer() *Server {
@@ -77,12 +83,12 @@ func (s *Server) ServeConn(conn io.ReadWriteCloser) {
 		log.Println("rpc server: invalid CodecType")
 		return
 	}
-	s.ServeCodec(f(conn)) //并行了
+	s.ServeCodec(f(conn),opt) //并行了
 }
 
 
 
-func (s *Server) ServeCodec(cod codec.Codec) {
+func (s *Server) ServeCodec(cod codec.Codec,opt *Option) {
 	//sending := sync.Mutex{}
 	sending := new(sync.Mutex)
 	wg := new(sync.WaitGroup) //管定义一个指针肯定不行，要分配内存啊 顶一个指针加内存
@@ -98,7 +104,7 @@ func (s *Server) ServeCodec(cod codec.Codec) {
 				continue
 		}
 		wg.Add(1)
-		go s.handleRequest(req,cod,wg,sending)
+		go s.handleRequest(req,cod,wg,sending,opt.HandleTimeout)
 	}
 	wg.Wait() //等待欧所有携程完在结束
 	 _ = cod.Close()
@@ -107,6 +113,8 @@ func (s *Server) ServeCodec(cod codec.Codec) {
 type request struct {
 	h *codec.Header
 	argv,replyv reflect.Value
+	mtype *methodType //方法还需要什么
+	svc *service //需要作为第一个参数么
 }
 
 func (s *Server) sendResponse(sending *sync.Mutex,h *codec.Header,body interface{},cod codec.Codec) {
@@ -118,16 +126,35 @@ func (s *Server) sendResponse(sending *sync.Mutex,h *codec.Header,body interface
 	}
 }
 
-func (s *Server) handleRequest(req *request,cod codec.Codec,wg *sync.WaitGroup,sending *sync.Mutex) {
+func (s *Server) handleRequest(req *request,cod codec.Codec,wg *sync.WaitGroup,sending *sync.Mutex,
+								timeout time.Duration) {
 	defer wg.Done()
 	//req.argv
-	log.Println("header:",req.h," body:",req.argv.Elem())  //elem指针  这个value必须是指针
+	//log.Println("header:",req.h," body:",req.argv.Elem())  //elem指针  这个value必须是指针
 	//Kind is not Interface or Ptr 类型是接口
 	//打印全部内容
-	req.replyv = reflect.ValueOf(fmt.Sprintf("geerpc resp %d",req.h.Seq))
-
-	s.sendResponse(sending,req.h,req.replyv.Interface(),cod) //错误已经在这里处理过了
-	//还是用的不熟练啊，这里不理解你后面的reflect.value 怎么可能理解
+	call := make(chan struct{})
+	sent := make(chan struct{})
+	go func() {
+		err := req.svc.Call(req.mtype,req.argv,req.replyv)
+		call<- struct{}{}
+		if err != nil {
+			req.h.Error = err.Error()
+			s.sendResponse(sending, req.h, invalidRequest, cod)
+			return
+		}
+		//req.replyv = reflect.ValueOf(fmt.Sprintf("geerpc resp %d",req.h.Seq))
+		s.sendResponse(sending,req.h,req.replyv.Interface(),cod) //错误已经在这里处理过了
+		//还是用的不熟练啊，这里不理解你后面的reflect.value 怎么可能理解
+		sent<- struct{}{}
+	}()
+	select {
+	case <-call:
+		<-sent
+	case <-time.After(timeout): //立即返回一个通道，然后过一会这个通道会给你发消息
+		req.h.Error = fmt.Sprintf("rpc server:request handle timeout: except within %s",timeout)
+		s.sendResponse(sending,req.h,req.replyv.Interface(),cod)
+	}
 }
 
 func (s *Server) readRequest(cod codec.Codec) (req *request,err error) {
@@ -139,12 +166,28 @@ func (s *Server) readRequest(cod codec.Codec) (req *request,err error) {
 	}
 	req = &request{h:h}
 
-	req.argv = reflect.New(reflect.TypeOf(""))  //reflect.Value 类型和值 现申请了一个Value然后传入禁区
+	svc,mtype,err := s.findService(h.ServiceMethod)  //打印过了已经
+	if err != nil {
+		return req,err
+	}
+	req.svc = svc
+	req.mtype = mtype
+	//req.argv = reflect.New(reflect.TypeOf(""))  //reflect.Value 类型和值 现申请了一个Value然后传入禁区
 	//argv是指针类型没问题
 	//reflect.ValueOf() 到底value里面是指针还是其他的值，不一定 看inerface吧
+	req.argv = mtype.newArgv()
+	req.replyv = mtype.newReply()
+	//只要有那个函数即可
+	//读取参数服务端，确保是一个指针？？？，但是传输了时候不是指针
 
-	if err = cod.ReadBody(req.argv.Interface());err != nil {
-		log.Println("rpc server:read body error:",err) //这里不直接返回，那怎么办，错误信息没有了吗
+	//反射得多思考思考
+	//req.argv.K 这两个区别在哪里
+	argvi := req.argv.Interface()
+	if req.argv.Kind() != reflect.Ptr {
+		argvi = req.argv.Addr().Interface() //就是求出接口对应的指针接口
+	}
+	if err := cod.ReadBody(argvi);err != nil {
+
 	}
 	return req,err
 }
@@ -161,4 +204,64 @@ func (s *Server) readRequestHeader(cod codec.Codec) (*codec.Header,error){
 		return nil,err
 	}
 	return h,nil
+}
+
+func (s *Server) Register(rcvr interface{}) error {  //为啥不注册一个类型呢？？，奇怪可能要作为第一个变量传入进去吧。
+	//就是你实现这个服务，里面可以带有一定的，自带数据结构，怎么理解类和实例的关系，这里好好想一想
+	service := newService(rcvr)
+	if _,dup := s.serviceMap.LoadOrStore(service.name,service);dup {
+		return errors.New("rpc server:already defined:"+service.name)
+	}
+	return nil
+}
+
+func Register(rcvr interface{}) error {
+	return DefaultServer.Register(rcvr)
+}
+
+
+func (s *Server) findService(serviceMethod string) (svc *service,mtype *methodType,err error)  {
+	dot := strings.LastIndex(serviceMethod,".")
+	if dot < 0 {
+		err = errors.New("rpc server: service.Method request ill-formed"+serviceMethod)
+		return
+	}
+	servicename,methodname := serviceMethod[:dot],serviceMethod[dot+1:]
+	svci,ok := s.serviceMap.Load(servicename) //svic
+	if !ok {
+		err = errors.New("rpc serevr:invalid service: " + servicename)
+		return
+	}
+	svc = svci.(*service)
+	mtype = svc.method[methodname] //两个map，一个是service，一个是method
+	if mtype == nil {
+		err = errors.New("rpc server:invalid method"+ methodname)
+	}
+	return
+}
+
+
+const (
+	connected = "200 Connected to yy RPC"
+	defaultRPCPath = "/_yyrpc_"
+	defaultDebugPath = "/debug/yyrpc"
+)
+
+func (s *Server) ServeHTTP(writer http.ResponseWriter, r *http.Request) {
+	if r.Method != "CONNECT" {
+		//了解一下吧
+		writer.Header().Set("Content-Type","text/plain;charset=utf-8")
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		_,_ = io.WriteString(writer,"405 must CONNECT\n")
+		return
+	}
+}
+
+
+func (s *Server) HandleHTTP() {
+	http.Handle(defaultRPCPath,s)  //都是传入某个具体的实例，如果传入结构体 or 传入函数,面向对象的特性，不是面向过程
+}
+
+func HandleHTTP() {
+	DefaultServer.HandleHTTP()
 }

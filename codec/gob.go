@@ -18,15 +18,10 @@ func (g *GobCodec) Close() error {
 }
 
 func (g *GobCodec) ReadHeader(header *Header) error {
-	//if err := g.dec.Decode(header);err != nil {  //这个函数这个地方也用的interface{} 可以看看底层结构
-	//	return err //分析一下底层数据结构
-	//}
-	//return nil
 	return g.dec.Decode(header)
 }
 
 func (g *GobCodec) ReadBody(body interface{}) error {
-	//gob.
 	return g.dec.Decode(body)
 }
 
