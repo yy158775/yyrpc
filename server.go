@@ -1,18 +1,20 @@
 package yyrpc
 
 import (
+	"RPC/codec"
+	//log "github.com/sirupsen/logrus"
+	reg "RPC/registry"
 	"encoding/json"
 	"errors"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
-	"yyrpc/codec"
 )
 
 //服务端是要针对所有链接上这个服务器的端口
@@ -264,4 +266,33 @@ func (s *Server) HandleHTTP() {
 
 func HandleHTTP() {
 	DefaultServer.HandleHTTP()
+}
+
+
+//要实现服务的那一段，隔一段时间发一个这个
+func Heartbeat(registry,addr string,duration time.Duration) {
+	if duration == 0 {
+		duration = reg.DefaultTimeout - time.Second
+	}
+	sendHeartbeat(registry,addr)
+	var err error
+	go func() {
+		ticker := time.NewTicker(duration)
+		for err == nil {
+			<-ticker.C
+			err = sendHeartbeat(registry, addr)
+		}
+	}()
+}
+
+func sendHeartbeat(registry,addr string) error {
+	log.Println(addr, "send heart beat to registry", registry)
+	httpclient := &http.Client{}
+	req,_ := http.NewRequest("POST",registry,nil)
+	req.Header.Set("X-Servers",addr)
+	if _,err := httpclient.Do(req);err != nil {
+		log.Println("rpc server: heart beat err:", err)
+		return err
+	}
+	return nil
 }

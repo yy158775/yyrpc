@@ -1,10 +1,12 @@
 package xclient
 
 import (
+	"RPC"
 	"context"
 	"io"
+	log "github.com/sirupsen/logrus"
+	"reflect"
 	"sync"
-	"yyrpc"
 )
 
 //也是如果负载均衡了话，那么一个客户端，肯定只有一个option
@@ -53,7 +55,10 @@ func (x *XClient) Call(ctx context.Context,ServiceMethod string,argv,reply inter
 }
 
 func (x *XClient) call(rpcaddr string,ctx context.Context,ServiceMethod string,argv,replyv interface{}) error {
+	//fmt.Println("rpc xclient:dial:",rpcaddr)
+	log.Debug("rpc xclient:dial ",rpcaddr)
 	client,err := x.dial(rpcaddr)
+	log.Debug("rpc xclient:dial return:",err)
 	if err != nil {
 		return err
 	}
@@ -72,7 +77,7 @@ func (x *XClient) dial(rpcaddr string) (client *yyrpc.Client,err error){
 	}
 	if client == nil {
 		var e error
-		client,e = XDial(rpcaddr,x.opt)
+		client,e = yyrpc.XDial(rpcaddr,x.opt)
 		if e != nil {
 			return nil,e
 		}
@@ -81,6 +86,46 @@ func (x *XClient) dial(rpcaddr string) (client *yyrpc.Client,err error){
 	return client,nil
 }
 
-func XDial(rpcaddr string,opt *yyrpc.Option) (*yyrpc.Client,error) {
-	return yyrpc.Dial("tcp",rpcaddr,opt)
+func (xc *XClient) Broadcast(ctx context.Context, serviceMethod string, args, reply interface{}) error {
+	serevrs,err := xc.d.GetAll()
+	if err != nil {
+		log.Println("rpc xclient:broadcast getall serves error:",err)
+		return err
+	}
+	replydone := reply == nil
+	ctx,cancel := context.WithCancel(ctx)
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for _,server := range serevrs {
+		wg.Add(1)
+
+		go func(rpcaddr string) {
+			var e error
+			defer wg.Done()
+			var clonereply interface{} //定义接口时
+			if !replydone {
+				//clonereply = reflect.New(reflect.ValueOf(reply).Elem().Type()).Interface()
+				clonereply = reflect.New(reflect.TypeOf(reply).Elem()).Interface()
+			}
+
+			//还是用的少，如果知道elem 是几种引用类型
+			//Type才行，type类型的话，获取elem就是在获取它的元素类型。也不是指针吧，就是元素类型
+			//Value 要求必须是指针或者接口
+			e = xc.call(server,ctx,serviceMethod,args,clonereply)
+			mu.Lock()
+			if e != nil && err == nil {
+				err = e
+				cancel() //直接取消，然后函数就会返回吧 这里协程会结束
+			}
+			if err == nil && !replydone {
+				reflect.ValueOf(reply).Elem().Set(reflect.ValueOf(clonereply).Elem())
+				replydone = true
+			}
+			mu.Unlock()
+		}(server)
+	}
+	wg.Wait()
+	return err
 }

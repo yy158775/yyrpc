@@ -38,11 +38,6 @@ func (m *methodType) newReply() reflect.Value {
 	var replyv reflect.Value
 	replyv = reflect.New(m.ReplyType.Elem())
 	//如果是指针的话，这个里面放的是地址啊
-	//if reflect.Indirect(replyv).Kind() == reflect.Slice {
-	//	replyv.Set(reflect.MakeSlice(m.ReplyType,0,1))
-	//} else if reflect.Indirect(replyv).Kind() == reflect.Map{
-	//	replyv.Set(reflect.MakeMap(m.ReplyType))
-	//}
 	switch replyv.Elem().Kind() {
 	case reflect.Map:
 		replyv.Elem().Set(reflect.MakeMap(m.ReplyType))

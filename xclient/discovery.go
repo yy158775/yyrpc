@@ -6,7 +6,6 @@ import (
 	"math/rand"
 	"sync"
 	"time"
-	"yyrpc"
 )
 
 type SelectMode int
@@ -14,7 +13,7 @@ type SelectMode int
 //注意用法都会不写了吗？
 const (
 	RoundRobinSelect SelectMode = iota
-	RandomModeSelect
+	RandomSelect
 )
 
 type Discovery interface {
@@ -39,6 +38,8 @@ func NewMultiServerDiscovery(servers []string) *MultiServerDiscovery {
 	d.index = d.r.Intn(math.MaxInt32-1)
 	//r 是一个产生随机数的实例，初始化时使用时间戳设定随机数种子，避免每次产生相同的随机数序列.
 	//index 记录 Round Robin 算法已经轮询到的位置，为了避免每次从 0 开始，初始化时随机设定一个值。
+
+	return d
 }
 
 var _ Discovery = (*MultiServerDiscovery)(nil)
@@ -66,7 +67,7 @@ func (m MultiServerDiscovery) Get(mode SelectMode) (string, error) {
 	case RoundRobinSelect:
 		s = m.servers[m.index%n]
 		m.index = (m.index+1)%n
-	case RandomModeSelect:
+	case RandomSelect:
 		s = m.servers[m.r.Intn(n)]
 	default:
 		return "",errors.New("rpc discovery:invalid select mode")
