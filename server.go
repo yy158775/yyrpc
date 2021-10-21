@@ -97,6 +97,7 @@ func (s *Server) ServeCodec(cod codec.Codec,opt *Option) {
 
 	for {
 		req,err := s.readRequest(cod)
+		log.Debug("rpc server:request ",req)
 		if err != nil {
 			if req == nil {
 				break //不可能恢复了 连头都没有读出来 结束这个链接  仔细分析一下错误的类型，计网各种错误的严重程度
@@ -120,12 +121,15 @@ type request struct {
 }
 
 func (s *Server) sendResponse(sending *sync.Mutex,h *codec.Header,body interface{},cod codec.Codec) {
+	log.Debug("rpc server:sendResponse begin")
 	sending.Lock()
+	log.Debug("rpc server:sendResponse lock")
 	defer sending.Unlock()
 	if err := cod.Write(h,body);err != nil {  //程序通过defer操作已经将这个接口关闭了 在这关闭也可以
 		//但是有设计到代码重用的方式
 		log.Println("rpc server: write response err:",err)
 	}
+	log.Debug("rpc server:sendResponse end")
 }
 
 func (s *Server) handleRequest(req *request,cod codec.Codec,wg *sync.WaitGroup,sending *sync.Mutex,
@@ -150,6 +154,16 @@ func (s *Server) handleRequest(req *request,cod codec.Codec,wg *sync.WaitGroup,s
 		//还是用的不熟练啊，这里不理解你后面的reflect.value 怎么可能理解
 		sent<- struct{}{}
 	}()
+
+	if timeout == 0 {
+		log.Debug("timeout:",timeout)
+		<-call
+		<-sent
+		return
+	}
+
+	//之前没加 直接0s处理
+	//rpc server:request handle timeout: except within 0s
 	select {
 	case <-call:
 		<-sent
@@ -160,10 +174,11 @@ func (s *Server) handleRequest(req *request,cod codec.Codec,wg *sync.WaitGroup,s
 }
 
 func (s *Server) readRequest(cod codec.Codec) (req *request,err error) {
+
 	h,err := s.readRequestHeader(cod)  //为什么要把读headere单独封装起来，感觉没必要 因为头部是一个比较重要的地方，如果后面
 	//出错了 好好思考如何设计协议太重要了这个
 	if err != nil {
-		fmt.Println("readRequest error:",err)
+		fmt.Println("rpc server:readRequestHeader error:",err)
 		return nil,err //直接返回nil，不用申请指针了 不可能恢复成功了
 	}
 	req = &request{h:h}
@@ -270,28 +285,38 @@ func HandleHTTP() {
 
 
 //要实现服务的那一段，隔一段时间发一个这个
-func Heartbeat(registry,addr string,duration time.Duration) {
+func Heartbeat(registry,addr string,duration time.Duration) error {
 	if duration == 0 {
 		duration = reg.DefaultTimeout - time.Second
 	}
-	sendHeartbeat(registry,addr)
-	var err error
-	go func() {
-		ticker := time.NewTicker(duration)
-		for err == nil {
-			<-ticker.C
-			err = sendHeartbeat(registry, addr)
-		}
-	}()
+	var err error //这就是共享变量吗？？ 没试过用一用试试吧
+	err = sendHeartbeat(registry,addr)
+	if err != nil {
+		return err
+	} else {
+		go func() {
+			ticker := time.NewTicker(duration) //这个可以思考一下怎么用
+			for err == nil {
+				<-ticker.C
+				err = sendHeartbeat(registry, addr)
+			}
+		}()
+	}
+	return nil
 }
 
 func sendHeartbeat(registry,addr string) error {
 	log.Println(addr, "send heart beat to registry", registry)
 	httpclient := &http.Client{}
-	req,_ := http.NewRequest("POST",registry,nil)
+
+	req,err := http.NewRequest("POST",registry,nil)
+	if err != nil {
+		log.Fatal("rpc server:sendHeartbeat error:",err)
+	}
 	req.Header.Set("X-Servers",addr)
+
 	if _,err := httpclient.Do(req);err != nil {
-		log.Println("rpc server: heart beat err:", err)
+		log.Println("rpc server: heart beat error:", err)
 		return err
 	}
 	return nil

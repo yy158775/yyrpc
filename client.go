@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -50,6 +50,7 @@ func (c *Client) Close() error {
 		log.Println("rpc client:has already closed")
 		return ErrShutDown
 	}
+
 
 	c.closing = true
 	return c.cc.Close()
@@ -95,11 +96,17 @@ func (c *Client) receive() {
 	var h codec.Header
 	var err error
 	for err == nil {
+		log.Debug("rpc client:start receive")
 		err = c.cc.ReadHeader(&h)
 		if err != nil {
+			log.Info("rpc client:receive error:",err)
 			break
 		}
+		log.Debug("rpc client:read header:",h.Seq)
+		log.Debug("rpc client:read header:",h.ServiceMethod)
 		call := c.pending[h.Seq]
+		//log.Debug("rpc client:pending call:",call)
+		log.Debug("rpc client:read header.Error ",h.Error)
 		switch {
 		case call == nil :
 			c.cc.ReadBody(nil) //没有说明什么已经去除了，可能只写了个头部
@@ -107,11 +114,13 @@ func (c *Client) receive() {
 			call.Error = errors.New(h.Error)
 			c.cc.ReadBody(nil) //只写了个头部但是还没来得及去除
 			//或者其他问题
+			//有错误 你不call done 怎么处理
 		default:
 			err = c.cc.ReadBody(call.reply)
 			if err != nil {
 				call.Error = errors.New("rpc client:read body error:"+err.Error())
 			}
+			log.Debug("rpc client call done")
 			call.done()
 		}
 	}
@@ -194,7 +203,10 @@ func (c *Client) Go(servciemethod string,args,replys interface{},done chan *Call
 
 func (c *Client) Call(ctx context.Context,servicemethod string,args,replys interface{}) error {
 	done := make(chan *Call,1)
+	//time.Sleep(time.Second*3)
+	log.Debug("client call go begin")
 	call := c.Go(servicemethod,args,replys,done)
+	//time.Sleep(time.Second*3)
 	//好像是这样有另外一个协程在既是吗？？
 	//明天再弄吧？？ 增加日志打印出输出
 	select {
@@ -222,8 +234,8 @@ func (c *Client) send(call *Call) {
 	c.header.ServiceMethod = call.ServiceMethod
 	c.header.Error = ""
 	//c.mu.Unlock()
-
 	if err := c.cc.Write(&c.header,call.Args);err != nil {
+		log.Debug("rpc client:write error:",err)
 		call := c.removeCall(call.Seq)
 		if call != nil {  //已经被接受处理了吧
 			call.done()

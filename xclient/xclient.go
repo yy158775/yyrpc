@@ -3,8 +3,8 @@ package xclient
 import (
 	"RPC"
 	"context"
-	"io"
 	log "github.com/sirupsen/logrus"
+	"io"
 	"reflect"
 	"sync"
 )
@@ -48,6 +48,7 @@ var _ io.Closer = (*XClient)(nil)
 //注册中心获得地址
 func (x *XClient) Call(ctx context.Context,ServiceMethod string,argv,reply interface{}) error {
 	rpcaddr,err := x.d.Get(x.mode)
+	//log.Info("rpc dicovery:Call addr:",rpcaddr)
 	if err != nil {
 		return err
 	}
@@ -62,6 +63,12 @@ func (x *XClient) call(rpcaddr string,ctx context.Context,ServiceMethod string,a
 	if err != nil {
 		return err
 	}
+	if client.IsAvailable() {
+		log.Debug("rpc client:client isavailable")
+	} else {
+		log.Warn("rpc client:client notavailable")
+	}
+
 	return client.Call(ctx,ServiceMethod,argv,replyv)
 }
 
