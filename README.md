@@ -38,9 +38,9 @@ DefaultTimeout = time.Minute * 5
 
 # 项目结构
 
-├── client.go \n
-├── client_test.go
-├── codec
+├── client.go  
+├── client_test.go  
+├── codec  
 │   ├── codec.go
 │   └── gob.go
 ├── example
