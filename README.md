@@ -40,29 +40,29 @@ DefaultTimeout = time.Minute * 5
 
 ├── client.go  
 ├── client_test.go  
-├── codec  
-│   ├── codec.go
-│   └── gob.go
-├── example
-│   ├── client
-│   │   ├── client
-│   │   └── client.go
-│   ├── main
-│   │   └── main.go
-│   ├── register
-│   │   └── registry.go
-│   └── server
-│       └── server.go
-├── go.mod
-├── go.sum
-├── registry
-│   └── registry.go
-├── server.go
-├── service.go
-└── xclient
-    ├── discovery_gee.go
-    ├── discovery.go
-    └── xclient.go
+├── codec   
+│   ├── codec.go  
+│   └── gob.go  
+├── example  
+│   ├── client  
+│   │   ├── client  
+│   │   └── client.go  
+│   ├── main  
+│   │   └── main.go  
+│   ├── register  
+│   │   └── registry.go  
+│   └── server  
+│       └── server.go  
+├── go.mod  
+├── go.sum  
+├── registry  
+│   └── registry.go  
+├── server.go  
+├── service.go  
+└── xclient  
+    ├── discovery_gee.go  
+    ├── discovery.go  
+    └── xclient.go  
 
 # example
 
