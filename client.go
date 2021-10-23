@@ -74,10 +74,11 @@ func (c *Client) registerCall(call *Call) (uint64,error) {
 }
 
 func (c *Client) removeCall(seq uint64) *Call {
-	c.sending.Lock()
-	defer c.sending.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	call := c.pending[seq]
 	delete(c.pending, seq)
-	return c.pending[seq]
+	return call
 }
 
 func (c *Client) terminateCalls() {
@@ -204,7 +205,6 @@ func (c *Client) Go(servciemethod string,args,replys interface{},done chan *Call
 func (c *Client) Call(ctx context.Context,servicemethod string,args,replys interface{}) error {
 	done := make(chan *Call,1)
 	//time.Sleep(time.Second*3)
-	log.Debug("client call go begin")
 	call := c.Go(servicemethod,args,replys,done)
 	//time.Sleep(time.Second*3)
 	//好像是这样有另外一个协程在既是吗？？
@@ -235,11 +235,10 @@ func (c *Client) send(call *Call) {
 	c.header.Error = ""
 	//c.mu.Unlock()
 	if err := c.cc.Write(&c.header,call.Args);err != nil {
-		log.Debug("rpc client:write error:",err)
 		call := c.removeCall(call.Seq)
 		if call != nil {  //已经被接受处理了吧
-			call.done()
 			call.Error = err  //不一定是服务端来的error，而是客户端自身产生的错误
+			call.done()
 		}
 	}
 }
@@ -301,9 +300,11 @@ func NewHTTPClient(conn net.Conn, opt *Option) (*Client, error) {
 	// Require successful HTTP response
 	// before switching to RPC protocol.
 	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: "CONNECT"})
+
 	if err == nil && resp.Status == connected {
 		return NewClient(conn, opt)
 	}
+
 	if err == nil {
 		err = errors.New("unexpected HTTP response: " + resp.Status)
 	}

@@ -53,7 +53,6 @@ func (r *YyRegistry) putServer(addr string) {
 }
 
 
-//r.timeout == 0 过期时间为0
 func (r *YyRegistry) aliveServers() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -80,6 +79,7 @@ func (r *YyRegistry) ServeHTTP(writer http.ResponseWriter, request *http.Request
 			return
 		}
 		r.putServer(addr)  //错误处理
+		//会返回请求吗？？怎么no code
 	default:
 		io.WriteString(writer,"Invalid HTTP Method\n")
 	}
@@ -94,8 +94,3 @@ func (r *YyRegistry) HandleHTTP(registryPath string) {
 func HandleHTTP() {
 	DefaultYyRegister.HandleHTTP(defaultPath)
 }
-
-////要实现服务的那一段，隔一段时间发一个这个
-//func Heartbeat(registry,addr string,duration time.Duration) {
-//	if duration.
-//}

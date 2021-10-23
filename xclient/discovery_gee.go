@@ -22,13 +22,16 @@ func (g GeeRegisteryDiscovery) Refresh() error {
 	}
 	log.Println("rpc dicovery:refresh from registry:",g.registry)
 	resp,err := http.Get(g.registry)
+
 	if err != nil {
 		log.Println("rpc discovery:http get error:",err)
 		return err
 	}
+
 	servers := resp.Header.Get("X-Servers")
+
 	g.servers =	strings.Split(servers,",")
-	//strings.TrimSpace() 为啥要这个 取出空格我也不太懂
+
 	return nil
 }
 

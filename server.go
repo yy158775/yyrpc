@@ -47,8 +47,6 @@ var DefaultOption = Option{
 }
 var DefaultServer = &Server{}
 
-//这个项目里面仔细分析一下，数据结构各个什么时候关闭，什么时候坑需要关闭，仔细想一下
-//每个数据结构的存在周期
 
 func (s *Server) Accept(lis net.Listener) {
 	for	{
@@ -57,18 +55,17 @@ func (s *Server) Accept(lis net.Listener) {
 			log.Println("rpc server: accept error:",err) //log.Fatal
 			return //直接返回 不是continue
 		}
-		go s.ServeConn(conn) //这里会不会出现问题 server终止了，那么怎么办  其他链接也出错了 这怎么办？
-		//思考一下这个问题吧
+		go s.ServeConn(conn)
 	}
 }
 
 func Accept(lis net.Listener) {
-	DefaultServer.Accept(lis) //包装一下
+	DefaultServer.Accept(lis)
 }
 
 func (s *Server) ServeConn(conn io.ReadWriteCloser) {
 
-	defer conn.Close()  //在这关闭 如果之前已经退出关闭过了会不会有影响
+	defer conn.Close()
 
 	dec := json.NewDecoder(conn)
 	var opt = &Option{}
@@ -91,7 +88,6 @@ func (s *Server) ServeConn(conn io.ReadWriteCloser) {
 
 
 func (s *Server) ServeCodec(cod codec.Codec,opt *Option) {
-	//sending := sync.Mutex{}
 	sending := new(sync.Mutex)
 	wg := new(sync.WaitGroup) //管定义一个指针肯定不行，要分配内存啊 顶一个指针加内存
 
@@ -309,15 +305,19 @@ func sendHeartbeat(registry,addr string) error {
 	log.Println(addr, "send heart beat to registry", registry)
 	httpclient := &http.Client{}
 
+	//如何复用http链接
 	req,err := http.NewRequest("POST",registry,nil)
+
 	if err != nil {
 		log.Fatal("rpc server:sendHeartbeat error:",err)
 	}
+
 	req.Header.Set("X-Servers",addr)
+	//http.DefaultClient.Do()
 
 	if _,err := httpclient.Do(req);err != nil {
-		log.Println("rpc server: heart beat error:", err)
 		return err
+		log.Println("rpc server: heart beat error:", err)
 	}
 	return nil
 }
